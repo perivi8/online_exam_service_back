@@ -1,5 +1,5 @@
 from bson import ObjectId
-from datetime import datetime
+import datetime
 
 class ProctoringLog:
     def __init__(self, student_id, exam_id, event, timestamp):
@@ -11,9 +11,9 @@ class ProctoringLog:
 
     def to_dict(self):
         return {
-            '_id': str(self._id),
+            '_id': self._id,
             'student_id': self.student_id,
             'exam_id': self.exam_id,
             'event': self.event,
-            'timestamp': self.timestamp.isoformat()
+            'timestamp': self.timestamp
         }

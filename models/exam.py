@@ -16,14 +16,14 @@ class Exam:
 
     def to_dict(self):
         return {
-            '_id': str(self._id),  # Convert ObjectId to string for JSON
+            '_id': self._id,
             'title': self.title,
             'duration': self.duration,
             'questions': self.questions,
             'created_by': self.created_by,
-            'scheduled_for': self.scheduled_for.isoformat(),  # Convert datetime to ISO string
+            'scheduled_for': self.scheduled_for,
             'randomize': self.randomize,
             'difficulty': self.difficulty,
-            'created_at': self.created_at.isoformat(),
+            'created_at': self.created_at,
             'status': self.status
         }

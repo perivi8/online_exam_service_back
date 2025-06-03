@@ -13,11 +13,11 @@ class Result:
 
     def to_dict(self):
         return {
-            '_id': str(self._id),
+            '_id': self._id,
             'student_id': self.student_id,
             'exam_id': self.exam_id,
             'score': self.score,
             'answers': self.answers,
-            'start_time': self.start_time.isoformat(),
+            'start_time': self.start_time,
             'status': self.status
         }

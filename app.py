@@ -9,10 +9,6 @@ from routes.queries import queries_bp
 from config import Config
 import logging
 import os
-from dotenv import load_dotenv
-
-# Load environment variables from .env file (for local development)
-load_dotenv()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -21,17 +17,12 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Configure CORS
-CORS(app, resources={
-    r"/api/*": {
-        "origins": ["https://online-exam-system-nine.vercel.app"],
-        "methods": ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"],
-        "supports_credentials": True
-    }
-})
+allowed_origins = os.getenv('ALLOWED_ORIGINS', 'http://localhost:4200,https://online-exam-system-nine.vercel.app').split(',')
+CORS(app, resources={r"/api/*": {"origins": allowed_origins}}, supports_credentials=True)
 
 # Load configuration
 app.config.from_object(Config)
+
 jwt = JWTManager(app)
 mail = Mail(app)
 
@@ -44,5 +35,4 @@ app.register_blueprint(queries_bp, url_prefix='/api')
 logger.info("Flask application started")
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(debug=True, port=5000)

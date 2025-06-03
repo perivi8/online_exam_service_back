@@ -10,6 +10,7 @@ import json
 import logging
 from config import Config
 
+
 exam_bp = Blueprint('exam', __name__)
 client = MongoClient(Config.MONGO_URI)
 db = client['online_exam']
@@ -21,21 +22,27 @@ users_collection = db['users']
 logger = logging.getLogger(__name__)
 
 @exam_bp.route('/create-exam', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required(optional=True)  # Allow OPTIONS without JWT
 def create_exam():
     logger.info(f"Received {request.method} request to create exam")
+
+    # Handle preflight OPTIONS request
     if request.method == 'OPTIONS':
         response = make_response()
         response.headers.add('Access-Control-Allow-Origin', 'https://online-exam-system-nine.vercel.app')
         response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add('Access-Control-Max-Age', '86400')  # Cache preflight for 24 hours
+        logger.info("Responded to OPTIONS preflight request")
         return response, 200
 
+    # For POST, ensure JWT is present
     current_user = get_jwt_identity()
     if not current_user:
         logger.error("No JWT identity found for POST request")
         return jsonify({'message': 'Missing authorization token'}), 401
 
+    logger.info(f"Current user: {current_user}")
     if current_user.get('role') not in ['teacher', 'examiner']:
         logger.warning(f"Unauthorized role: {current_user.get('role')} for user {current_user.get('email')}")
         return jsonify({'message': 'Unauthorized'}), 403
@@ -43,38 +50,42 @@ def create_exam():
     data = request.form.to_dict()
     questions = []
 
+    # Debug: Log received form data
     logger.info(f"Received form data: {dict(request.form)}")
     if 'csv_file' in request.files:
         logger.info("CSV file detected")
+    if request.form.getlist('questions[]'):
+        logger.info(f"Manual questions received: {request.form.getlist('questions[]')}")
+
+    # Process CSV file if provided
+    if 'csv_file' in request.files:
         csv_file = request.files['csv_file']
         if csv_file.filename.endswith('.csv'):
-            try:
-                stream = StringIO(csv_file.stream.read().decode('UTF-8'))
-                csv_reader = csv.DictReader(stream)
-                for row in csv_reader:
-                    if row['type'].lower() == 'mcq':
-                        questions.append({
-                            'question': row['question'],
-                            'options': [row['option1'], row['option2'], row['option3'], row['option4']],
-                            'correct_option': int(row['correct_option']),
-                            'difficulty': row['difficulty'],
-                            'type': 'mcq'
-                        })
-                    else:
-                        questions.append({
-                            'question': row['question'],
-                            'difficulty': row['difficulty'],
-                            'type': 'subjective'
-                        })
-                logger.info(f"Processed {len(questions)} questions from CSV")
-            except Exception as e:
-                logger.error(f"Failed to process CSV: {str(e)}")
-                return jsonify({'message': 'Invalid CSV file'}), 400
+            stream = StringIO(csv_file.stream.read().decode('UTF-8'))
+            csv_reader = csv.DictReader(stream)
+            for row in csv_reader:
+                if row['type'].lower() == 'mcq':
+                    questions.append({
+                        'question': row['question'],
+                        'options': [row['option1'], row['option2'], row['option3'], row['option4']],
+                        'correct_option': int(row['correct_option']),
+                        'difficulty': row['difficulty'],
+                        'type': 'mcq'
+                    })
+                else:
+                    questions.append({
+                        'question': row['question'],
+                        'difficulty': row['difficulty'],
+                        'type': 'subjective'
+                    })
+            logger.info(f"Processed {len(questions)} questions from CSV")
+
+    # If no CSV, process manual questions
     elif request.form.getlist('questions[]'):
         question_data = request.form.getlist('questions[]')
         for q in question_data:
             try:
-                q_dict = json.loads(q)
+                q_dict = json.loads(q)  # Use json.loads for safe parsing
                 if q_dict['type'] == 'mcq':
                     questions.append({
                         'question': q_dict['question'],
@@ -98,26 +109,22 @@ def create_exam():
         logger.error("No questions provided after processing")
         return jsonify({'message': 'No questions provided. Please provide questions via CSV or manually.'}), 400
 
-    try:
-        exam = {
-            'title': data['title'],
-            'duration': int(data['duration']),
-            'questions': questions,
-            'scheduled_for': datetime.strptime(data['scheduled_for'], '%Y-%m-%dT%H:%M:%S.%fZ'),
-            'randomized': data.get('randomized') == 'true',
-            'difficulty': data['difficulty'],
-            'created_at': datetime.utcnow(),
-            'created_by': current_user['email'],
-            'status': 'scheduled'
-        }
-        if exam['randomized']:
-            random.shuffle(exam['questions'])
-        result = exams_collection.insert_one(exam)
-        logger.info(f"Exam created with ID: {str(result.inserted_id)}")
-        return jsonify({'message': 'Exam created successfully', 'exam_id': str(result.inserted_id)}), 201
-    except Exception as e:
-        logger.error(f"Failed to create exam: {str(e)}")
-        return jsonify({'message': 'Failed to create exam'}), 500
+    exam = {
+        'title': data['title'],
+        'duration': int(data['duration']),
+        'questions': questions,
+        'scheduled_for': datetime.strptime(data['scheduled_for'], '%Y-%m-%dT%H:%M:%S.%fZ'),
+        'randomized': data.get('randomized') == 'true',
+        'difficulty': data['difficulty'],
+        'created_at': datetime.utcnow(),
+        'created_by': current_user['email'],
+        'status': 'scheduled'
+    }
+    if exam['randomized']:
+        random.shuffle(exam['questions'])
+    result = exams_collection.insert_one(exam)
+    logger.info(f"Exam created with ID: {str(result.inserted_id)}")
+    return jsonify({'message': 'Exam created successfully', 'exam_id': str(result.inserted_id)}), 201
 
 @exam_bp.route('/edit-exam/<exam_id>', methods=['PATCH', 'OPTIONS'])
 @jwt_required(optional=True)
@@ -128,6 +135,8 @@ def edit_exam(exam_id):
         response.headers.add('Access-Control-Allow-Origin', 'https://online-exam-system-nine.vercel.app')
         response.headers.add('Access-Control-Allow-Methods', 'PATCH, OPTIONS')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add('Access-Control-Max-Age', '86400')
+        logger.info("Responded to OPTIONS preflight request")
         return response, 200
 
     current_user = get_jwt_identity()
@@ -149,11 +158,7 @@ def edit_exam(exam_id):
     if 'duration' in data:
         update['duration'] = int(data['duration'])
     if 'scheduled_for' in data:
-        try:
-            update['scheduled_for'] = datetime.strptime(data['scheduled_for'], '%Y-%m-%dT%H:%M')
-        except ValueError:
-            logger.error("Invalid datetime format for scheduled_for")
-            return jsonify({'message': 'Invalid datetime format'}), 400
+        update['scheduled_for'] = datetime.strptime(data['scheduled_for'], '%Y-%m-%dT%H:%M')
     if 'randomized' in data:
         update['randomized'] = data['randomized'] == 'true'
     if 'difficulty' in data:
@@ -163,61 +168,48 @@ def edit_exam(exam_id):
     if 'csv_file' in request.files:
         csv_file = request.files['csv_file']
         if csv_file.filename.endswith('.csv'):
-            try:
-                stream = StringIO(csv_file.stream.read().decode('UTF-8'))
-                csv_reader = csv.DictReader(stream)
-                for row in csv_reader:
-                    if row['type'].lower() == 'mcq':
-                        questions.append({
-                            'question': row['question'],
-                            'options': [row['option1'], row['option2'], row['option3'], row['option4']],
-                            'correct_option': int(row['correct_option']),
-                            'difficulty': row['difficulty'],
-                            'type': 'mcq'
-                        })
-                    else:
-                        questions.append({
-                            'question': row['question'],
-                            'difficulty': row['difficulty'],
-                            'type': 'subjective'
-                        })
-            except Exception as e:
-                logger.error(f"Failed to process CSV: {str(e)}")
-                return jsonify({'message': 'Invalid CSV file'}), 400
-    elif request.form.getlist('questions[]'):
-        for q in request.form.getlist('questions[]'):
-            try:
-                q_dict = json.loads(q)
-                if q_dict['type'] == 'mcq':
+            stream = StringIO(csv_file.stream.read().decode('UTF-8'))
+            csv_reader = csv.DictReader(stream)
+            for row in csv_reader:
+                if row['type'].lower() == 'mcq':
                     questions.append({
-                        'question': q_dict['question'],
-                        'options': q_dict['options'],
-                        'correct_option': q_dict['correct_option'],
-                        'difficulty': q_dict['difficulty'],
+                        'question': row['question'],
+                        'options': [row['option1'], row['option2'], row['option3'], row['option4']],
+                        'correct_option': int(row['correct_option']),
+                        'difficulty': row['difficulty'],
                         'type': 'mcq'
                     })
                 else:
                     questions.append({
-                        'question': q_dict['question'],
-                        'difficulty': q_dict['difficulty'],
+                        'question': row['question'],
+                        'difficulty': row['difficulty'],
                         'type': 'subjective'
                     })
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse question: {q}, Error: {str(e)}")
-                return jsonify({'message': 'Invalid question format in manual questions'}), 400
+    elif request.form.getlist('questions[]'):
+        for q in request.form.getlist('questions[]'):
+            q_dict = json.loads(q)
+            if q_dict['type'] == 'mcq':
+                questions.append({
+                    'question': q_dict['question'],
+                    'options': q_dict['options'],
+                    'correct_option': q_dict['correct_option'],
+                    'difficulty': q_dict['difficulty'],
+                    'type': 'mcq'
+                })
+            else:
+                questions.append({
+                    'question': q_dict['question'],
+                    'difficulty': q_dict['difficulty'],
+                    'type': 'subjective'
+                })
     if questions:
         update['questions'] = questions
         if update.get('randomized', exam['randomized']):
             random.shuffle(update['questions'])
 
     if update:
-        try:
-            exams_collection.update_one({'_id': ObjectId(exam_id)}, {'$set': update})
-            logger.info(f"Exam {exam_id} updated successfully")
-            return jsonify({'message': 'Exam updated successfully'}), 200
-        except Exception as e:
-            logger.error(f"Failed to update exam: {str(e)}")
-            return jsonify({'message': 'Failed to update exam'}), 500
+        exams_collection.update_one({'_id': ObjectId(exam_id)}, {'$set': update})
+        return jsonify({'message': 'Exam updated successfully'})
     return jsonify({'message': 'No changes provided'}), 400
 
 @exam_bp.route('/delete-exam/<exam_id>', methods=['DELETE', 'OPTIONS'])
@@ -229,6 +221,7 @@ def delete_exam(exam_id):
         response.headers.add('Access-Control-Allow-Origin', 'https://online-exam-system-nine.vercel.app')
         response.headers.add('Access-Control-Allow-Methods', 'DELETE, OPTIONS')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add('Access-Control-Max-Age', '86400')
         return response, 200
 
     current_user = get_jwt_identity()
@@ -240,10 +233,8 @@ def delete_exam(exam_id):
 
     result = exams_collection.delete_one({'_id': ObjectId(exam_id), 'created_by': current_user['email']})
     if result.deleted_count == 0:
-        logger.warning(f"Exam {exam_id} not found or unauthorized for user {current_user['email']}")
         return jsonify({'message': 'Exam not found or unauthorized'}), 404
-    logger.info(f"Exam {exam_id} deleted successfully")
-    return jsonify({'message': 'Exam deleted successfully'}), 200
+    return jsonify({'message': 'Exam deleted successfully'})
 
 @exam_bp.route('/get-exams', methods=['GET', 'OPTIONS'])
 @jwt_required(optional=True)
@@ -254,6 +245,8 @@ def get_exams():
         response.headers.add('Access-Control-Allow-Origin', 'https://online-exam-system-nine.vercel.app')
         response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add('Access-Control-Max-Age', '86400')
+        logger.info("Responded to OPTIONS preflight request")
         return response, 200
 
     current_user = get_jwt_identity()
@@ -295,8 +288,7 @@ def get_exams():
                 'start_time': submission.get('start_time', '').isoformat() if submission.get('start_time') else None
             }
         result.append(exam_data)
-    logger.info(f"Retrieved {len(result)} exams for user {current_user['email']}")
-    return jsonify(result), 200
+    return jsonify(result)
 
 @exam_bp.route('/get-exams/<exam_id>', methods=['GET', 'OPTIONS'])
 @jwt_required(optional=True)
@@ -307,6 +299,8 @@ def get_exam_by_id(exam_id):
         response.headers.add('Access-Control-Allow-Origin', 'https://online-exam-system-nine.vercel.app')
         response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add('Access-Control-Max-Age', '86400')
+        logger.info("Responded to OPTIONS preflight request")
         return response, 200
     
     current_user = get_jwt_identity()
@@ -315,7 +309,6 @@ def get_exam_by_id(exam_id):
     
     exam = exams_collection.find_one({'_id': ObjectId(exam_id)})
     if not exam:
-        logger.warning(f"Exam {exam_id} not found")
         return jsonify({'message': 'Exam not found'}), 404
     
     exam_data = {
@@ -328,7 +321,6 @@ def get_exam_by_id(exam_id):
         'questions': exam['questions'] if current_user.get('role') in ['teacher', 'examiner'] else [],
         'status': exam['status']
     }
-    logger.info(f"Retrieved exam {exam_id} for user {current_user['email']}")
     return jsonify(exam_data), 200
 
 @exam_bp.route('/submit-exam', methods=['POST', 'OPTIONS'])
@@ -340,6 +332,7 @@ def submit_exam():
         response.headers.add('Access-Control-Allow-Origin', 'https://online-exam-system-nine.vercel.app')
         response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add('Access-Control-Max-Age', '86400')
         return response, 200
 
     current_user = get_jwt_identity()
@@ -350,16 +343,10 @@ def submit_exam():
         return jsonify({'message': 'Unauthorized'}), 403
 
     data = request.get_json()
-    if not data or 'exam_id' not in data or 'answers' not in data:
-        logger.error("Missing required fields in submit-exam request")
-        return jsonify({'message': 'Missing required fields'}), 400
-
     exam = exams_collection.find_one({'_id': ObjectId(data['exam_id'])})
     if not exam:
-        logger.warning(f"Exam {data['exam_id']} not found")
         return jsonify({'message': 'Exam not found'}), 404
     if exam['scheduled_for'] > datetime.utcnow():
-        logger.warning(f"Exam {data['exam_id']} not yet available")
         return jsonify({'message': 'Exam not yet available'}), 403
 
     submission = submissions_collection.find_one({
@@ -367,7 +354,6 @@ def submit_exam():
         'user_email': current_user['email']
     })
     if submission and submission['status'] == 'completed':
-        logger.warning(f"Exam {data['exam_id']} already submitted by {current_user['email']}")
         return jsonify({'message': 'Exam already submitted'}), 400
 
     score = 0
@@ -377,33 +363,28 @@ def submit_exam():
             if isinstance(answers[i].get('answer'), (int, str)) and int(answers[i].get('answer')) == q['correct_option']:
                 score += 1
 
-    try:
-        if submission:
-            submissions_collection.update_one(
-                {'_id': submission['_id']},
-                {'$set': {
-                    'answers': answers,
-                    'score': score,
-                    'submitted_at': datetime.utcnow(),
-                    'status': 'completed'
-                }}
-            )
-        else:
-            submissions_collection.insert_one({
-                'exam_id': data['exam_id'],
-                'user_email': current_user['email'],
-                'student_id': current_user['student_id'],
+    if submission:
+        submissions_collection.update_one(
+            {'_id': submission['_id']},
+            {'$set': {
                 'answers': answers,
                 'score': score,
-                'start_time': data.get('start_time', datetime.utcnow()),
                 'submitted_at': datetime.utcnow(),
                 'status': 'completed'
-            })
-        logger.info(f"Exam {data['exam_id']} submitted by {current_user['email']}")
-        return jsonify({'message': 'Exam submitted successfully'}), 200
-    except Exception as e:
-        logger.error(f"Failed to submit exam: {str(e)}")
-        return jsonify({'message': 'Failed to submit exam'}), 500
+            }}
+        )
+    else:
+        submissions_collection.insert_one({
+            'exam_id': data['exam_id'],
+            'user_email': current_user['email'],
+            'student_id': current_user['student_id'],
+            'answers': answers,
+            'score': score,
+            'start_time': data.get('start_time', datetime.utcnow()),
+            'submitted_at': datetime.utcnow(),
+            'status': 'completed'
+        })
+    return jsonify({'message': 'Exam submitted successfully'})
 
 @exam_bp.route('/start-exam/<exam_id>', methods=['POST', 'OPTIONS'])
 @jwt_required(optional=True)
@@ -424,45 +405,40 @@ def start_exam(exam_id):
 
     exam = exams_collection.find_one({'_id': ObjectId(exam_id)})
     if not exam:
-        logger.warning(f"Exam {exam_id} not found")
         return jsonify({'message': 'Exam not found'}), 404
 
+    # Check if exam is scheduled and available
     now = datetime.utcnow()
     if exam['scheduled_for'] > now:
-        logger.warning(f"Exam {exam_id} not yet available")
         return jsonify({'message': 'Exam not yet available'}), 400
 
+    # Check if submission already exists
     submission = submissions_collection.find_one({
         'exam_id': exam_id,
         'user_email': current_user['email']
     })
     if submission:
-        logger.info(f"Exam {exam_id} already started by {current_user['email']}")
         return jsonify({
             'message': 'Exam already started',
             'start_time': submission['start_time'].isoformat(),
-            'duration': exam['duration']
+            'duration': exam['duration']  # Return duration in minutes
         }), 200
 
-    try:
-        submission = {
-            'exam_id': exam_id,
-            'user_email': current_user['email'],
-            'start_time': now,
-            'status': 'in_progress',
-            'answers': [],
-            'score': 0
-        }
-        submissions_collection.insert_one(submission)
-        logger.info(f"Exam {exam_id} started by {current_user['email']}")
-        return jsonify({
-            'message': 'Exam started successfully',
-            'start_time': now.isoformat(),
-            'duration': exam['duration']
-        }), 200
-    except Exception as e:
-        logger.error(f"Failed to start exam: {str(e)}")
-        return jsonify({'message': 'Failed to start exam'}), 500
+    # Create new submission
+    submission = {
+        'exam_id': exam_id,
+        'user_email': current_user['email'],
+        'start_time': now,
+        'status': 'in_progress',
+        'answers': [],
+        'score': 0
+    }
+    submissions_collection.insert_one(submission)
+    return jsonify({
+        'message': 'Exam started successfully',
+        'start_time': now.isoformat(),
+        'duration': exam['duration']  # Return duration in minutes
+    }), 200
 
 @exam_bp.route('/evaluate-exam', methods=['POST', 'OPTIONS'])
 @jwt_required(optional=True)
@@ -473,6 +449,7 @@ def evaluate_exam():
         response.headers.add('Access-Control-Allow-Origin', 'https://online-exam-system-nine.vercel.app')
         response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add('Access-Control-Max-Age', '86400')
         return response, 200
 
     current_user = get_jwt_identity()
@@ -483,37 +460,27 @@ def evaluate_exam():
         return jsonify({'message': 'Unauthorized'}), 403
 
     data = request.get_json()
-    if not data or 'exam_id' not in data or 'user_email' not in data:
-        logger.error("Missing required fields in evaluate-exam request")
-        return jsonify({'message': 'Missing required fields'}), 400
-
     submission = submissions_collection.find_one({
         'exam_id': data['exam_id'],
         'user_email': data['user_email']
     })
     if not submission:
-        logger.warning(f"Submission not found for exam {data['exam_id']}, user {data['user_email']}")
         return jsonify({'message': 'Submission not found'}), 404
 
-    try:
-        subjective_marks = sum(float(m) for m in data['subjective_marks'] if m is not None)
-        total_marks = submission['score'] + subjective_marks
-        rank = data['rank']
+    subjective_marks = sum(float(m) for m in data['subjective_marks'] if m is not None)
+    total_marks = submission['score'] + subjective_marks
+    rank = data['rank']
 
-        submissions_collection.update_one(
-            {'_id': submission['_id']},
-            {'$set': {
-                'subjective_marks': subjective_marks,
-                'total_marks': total_marks,
-                'rank': rank,
-                'status': 'completed'
-            }}
-        )
-        logger.info(f"Exam {data['exam_id']} evaluated for user {data['user_email']}")
-        return jsonify({'message': 'Exam evaluated successfully'}), 200
-    except Exception as e:
-        logger.error(f"Failed to evaluate exam: {str(e)}")
-        return jsonify({'message': 'Failed to evaluate exam'}), 500
+    submissions_collection.update_one(
+        {'_id': submission['_id']},
+        {'$set': {
+            'subjective_marks': subjective_marks,
+            'total_marks': total_marks,
+            'rank': rank,
+            'status': 'completed'
+        }}
+    )
+    return jsonify({'message': 'Exam evaluated successfully'})
 
 @exam_bp.route('/get-submission/<exam_id>/<user_email>', methods=['GET', 'OPTIONS'])
 @jwt_required(optional=True)
@@ -524,6 +491,7 @@ def get_submission(exam_id, user_email):
         response.headers.add('Access-Control-Allow-Origin', 'https://online-exam-system-nine.vercel.app')
         response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add('Access-Control-Max-Age', '86400')
         return response, 200
 
     current_user = get_jwt_identity()
@@ -538,12 +506,10 @@ def get_submission(exam_id, user_email):
         'user_email': user_email
     })
     if not submission:
-        logger.warning(f"Submission not found for exam {exam_id}, user {user_email}")
         return jsonify({'message': 'Submission not found'}), 404
 
     exam = exams_collection.find_one({'_id': ObjectId(exam_id)})
     if not exam:
-        logger.warning(f"Exam {exam_id} not found")
         return jsonify({'message': 'Exam not found'}), 404
 
     return jsonify({
@@ -558,7 +524,7 @@ def get_submission(exam_id, user_email):
         'rank': submission.get('rank', ''),
         'status': submission['status'],
         'start_time': submission.get('start_time', '').isoformat() if submission.get('start_time') else None
-    }), 200
+    })
 
 @exam_bp.route('/get-student/<student_email>', methods=['GET', 'OPTIONS'])
 @jwt_required(optional=True)
@@ -569,6 +535,7 @@ def get_student(student_email):
         response.headers.add('Access-Control-Allow-Origin', 'https://online-exam-system-nine.vercel.app')
         response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add('Access-Control-Max-Age', '86400')
         return response, 200
 
     current_user = get_jwt_identity()
@@ -580,11 +547,10 @@ def get_student(student_email):
 
     student = users_collection.find_one({'email': student_email, 'role': 'student'})
     if not student:
-        logger.warning(f"Student {student_email} not found")
         return jsonify({'message': 'Student not found'}), 404
 
     return jsonify({
         'name': student['name'],
         'email': student['email'],
         'student_id': student['student_id']
-    }), 200
+    })

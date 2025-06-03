@@ -21,13 +21,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Configure CORS
-CORS(app, resources={
-    r"/api/*": {
-        "origins": ["https://online-exam-system-nine.vercel.app"],
-        "methods": ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
-    }
-}, supports_credentials=True)
+CORS(app)
 
 # Load configuration
 app.config.from_object(Config)

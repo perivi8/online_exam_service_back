@@ -3,7 +3,7 @@ import numpy as np
 import logging
 from pymongo import MongoClient
 from config import Config
-from datetime import datetime
+import datetime
 import xml.etree.ElementTree as ET
 
 # Set up logging
@@ -35,27 +35,23 @@ except Exception as e:
     logger.error(f"Failed to initialize model: {str(e)}")
 
 def generate_proctoring_xml(student_id, exam_id, result, log_entries):
-    try:
-        root = ET.Element("ProctoringReport")
-        
-        ET.SubElement(root, "StudentID").text = str(student_id)
-        ET.SubElement(root, "ExamID").text = str(exam_id)
-        ET.SubElement(root, "MalpracticeDetected").text = "Yes" if result else "No"
+    root = ET.Element("ProctoringReport")
+    
+    ET.SubElement(root, "StudentID").text = str(student_id)
+    ET.SubElement(root, "ExamID").text = str(exam_id)
+    ET.SubElement(root, "MalpracticeDetected").text = "Yes" if result else "No"
 
-        logs_elem = ET.SubElement(root, "Logs")
-        for entry in log_entries:
-            event_elem = ET.SubElement(logs_elem, "Event")
-            ET.SubElement(event_elem, "Timestamp").text = entry["timestamp"].isoformat()
-            ET.SubElement(event_elem, "Message").text = entry["event"]
+    logs_elem = ET.SubElement(root, "Logs")
+    for entry in log_entries:
+        event_elem = ET.SubElement(logs_elem, "Event")
+        ET.SubElement(event_elem, "Timestamp").text = entry["timestamp"].isoformat()
+        ET.SubElement(event_elem, "Message").text = entry["event"]
 
-        tree = ET.ElementTree(root)
-        filename = f"proctoring_report_{student_id}_{exam_id}.xml"
-        tree.write(filename, encoding='utf-8', xml_declaration=True)
-        logger.info(f"XML report saved as {filename}")
-        return filename
-    except Exception as e:
-        logger.error(f"Failed to generate XML report: {str(e)}")
-        return None
+    tree = ET.ElementTree(root)
+    filename = f"proctoring_report_{student_id}_{exam_id}.xml"
+    tree.write(filename, encoding='utf-8', xml_declaration=True)
+    logger.info(f"XML report saved as {filename}")
+    return filename
 
 def start_proctoring(student_id, exam_id):
     try:
@@ -84,7 +80,7 @@ def start_proctoring(student_id, exam_id):
                     'student_id': student_id,
                     'exam_id': exam_id,
                     'event': 'No face detected',
-                    'timestamp': datetime.now()
+                    'timestamp': datetime.datetime.now()
                 }
                 proctoring_logs.insert_one(log)
             out.write(frame)
@@ -121,12 +117,12 @@ def detect_malpractice(file_path, student_id, exam_id):
             input_data = resized.reshape(1, 64, 64, 1) / 255.0
 
             prediction = model.predict(input_data, verbose=0)
-            if prediction[0][0] > 0.5:
+            if prediction[0][0] > 0.5:  # Threshold
                 log_entry = {
                     'student_id': student_id,
                     'exam_id': exam_id,
                     'event': 'Suspicious activity detected',
-                    'timestamp': datetime.now()
+                    'timestamp': datetime.datetime.now()
                 }
                 proctoring_logs.insert_one(log_entry)
                 logs.append(log_entry)
@@ -135,7 +131,9 @@ def detect_malpractice(file_path, student_id, exam_id):
         cap.release()
         logger.info(f"Malpractice detection completed for {file_path}")
 
+        # Generate XML report
         generate_proctoring_xml(student_id, exam_id, malpractice_detected, logs)
+
         return malpractice_detected
     except Exception as e:
         logger.error(f"Malpractice detection failed: {str(e)}")

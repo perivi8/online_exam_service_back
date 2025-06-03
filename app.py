@@ -1,4 +1,4 @@
-from flask import Flask, make_response
+from flask import Flask
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from flask_mail import Mail
@@ -21,7 +21,14 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Configure CORS
-CORS(app)
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["https://online-exam-system-nine.vercel.app"],
+        "methods": ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": True
+    }
+})
 
 # Load configuration
 app.config.from_object(Config)
@@ -33,16 +40,6 @@ app.register_blueprint(auth_bp, url_prefix='/api')
 app.register_blueprint(exam_bp, url_prefix='/api')
 app.register_blueprint(proctoring_bp, url_prefix='/api')
 app.register_blueprint(queries_bp, url_prefix='/api')
-
-# Handle OPTIONS requests globally (optional, for redundancy)
-@app.route('/api/<path:path>', methods=['OPTIONS'])
-def handle_options(path):
-    response = make_response()
-    response.headers.add('Access-Control-Allow-Origin', 'https://online-exam-system-nine.vercel.app')
-    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    return response, 200
 
 logger.info("Flask application started")
 
